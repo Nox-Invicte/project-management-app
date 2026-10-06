@@ -1,36 +1,40 @@
-This is a [Next.js](https://nextjs.org) project bootstrapped with [`create-next-app`](https://nextjs.org/docs/app/api-reference/cli/create-next-app).
+# Taskflow
 
-## Getting Started
+Taskflow is a Next.js project and task manager backed by Supabase Auth and Postgres.
 
-First, run the development server:
+## Setup
+
+1. Create a Supabase project and run [`supabase/schema.sql`](./supabase/schema.sql) in the SQL editor.
+2. Copy [`.env.example`](./.env.example) to `.env.local` and fill in the project URL and anon key from **Project settings → API**.
+3. In Supabase Auth settings, choose whether email confirmation is required.
+4. Install and run the app:
 
 ```bash
+npm install
 npm run dev
-# or
-yarn dev
-# or
-pnpm dev
-# or
-bun dev
 ```
 
-Open [http://localhost:3000](http://localhost:3000) with your browser to see the result.
+Open `http://localhost:3000`. Register with a full name, unique email, and an 8+ character password. Supabase stores passwords securely and maintains the browser session; unauthenticated users are redirected to `/login`.
 
-You can start editing the page by modifying `app/page.tsx`. The page auto-updates as you edit the file.
+## Features
 
-This project uses [`next/font`](https://nextjs.org/docs/app/building-your-application/optimizing/fonts) to automatically optimize and load [Geist](https://vercel.com/font), a new font family for Vercel.
+- Email/password registration, login, logout, email confirmation support, and persistent Supabase sessions.
+- Dashboard totals for projects, tasks, completed tasks, and projects in progress.
+- Project and task create, edit, delete, and task completion actions.
+- Search across projects/tasks, project status filtering, and task status/priority filtering.
+- Responsive workspace layout for desktop and mobile browsers.
 
-## Learn More
+## Data and security
 
-To learn more about Next.js, take a look at the following resources:
+Supabase Auth owns the `auth.users` table, password hashing, email uniqueness, sessions, and token expiry. The SQL script only creates `projects` and `tasks`; it does not create a users or passwords table. Every project and task has an `owner_id` referencing `auth.users(id)`, and RLS policies require `auth.uid()` to match that owner. Tasks can only reference projects owned by the current user. Projects cascade-delete their tasks.
 
-- [Next.js Documentation](https://nextjs.org/docs) - learn about Next.js features and API.
-- [Learn Next.js](https://nextjs.org/learn) - an interactive Next.js tutorial.
+To populate safe sample data for the currently signed-in user, run `select public.seed_demo_data();` in the SQL editor. The function is idempotent and does not create users.
 
-You can check out [the Next.js GitHub repository](https://github.com/vercel/next.js) - your feedback and contributions are welcome!
+### Security controls
 
-## Deploy on Vercel
-
-The easiest way to deploy your Next.js app is to use the [Vercel Platform](https://vercel.com/new?utm_medium=default-template&filter=next.js&utm_source=create-next-app&utm_campaign=create-next-app-readme) from the creators of Next.js.
-
-Check out our [Next.js deployment documentation](https://nextjs.org/docs/app/building-your-application/deploying) for more details.
+- **JWT authentication:** Supabase Auth issues and refreshes signed JWT access tokens. The browser client sends them through the Supabase SDK; no custom JWT or password table is used.
+- **Protected routes:** [`src/proxy.ts`](./src/proxy.ts) refreshes the Supabase session and redirects unauthenticated users away from dashboard, project, and task routes. It also redirects authenticated users away from login and registration.
+- **Authorization:** Postgres RLS checks `auth.uid() = owner_id` for every project/task operation, including cross-project task ownership checks.
+- **SQL injection protection:** Data access uses Supabase PostgREST methods (`select`, `insert`, `update`, `delete`, and `eq`) rather than interpolated SQL. Supabase parameterizes these requests.
+- **Sensitive responses:** The application only selects project/task fields and user metadata needed by the UI. Passwords and Auth internals remain in Supabase Auth and are never returned by the app.
+- **Authentication rate limiting:** Supabase Auth applies server-side rate limits to sign-up and password sign-in endpoints. Review and adjust them in Supabase Dashboard → Authentication → Rate Limits. The UI also disables each auth form while its request is in progress.
