@@ -38,5 +38,11 @@ export async function saveTask(input: TaskInput, id?: string) {
   return taskFromRow(result.data as TaskRow);
 }
 
+export async function updateProjectStatus(id: string, status: Project["status"]) {
+  const result = await createSupabaseBrowserClient().from("projects").update({ status }).eq("id", id).select().single();
+  ensure(result.error);
+  return projectFromRow(result.data as ProjectRow);
+}
+
 export async function deleteProject(id: string) { const { error } = await createSupabaseBrowserClient().from("projects").delete().eq("id", id); ensure(error); }
 export async function deleteTask(id: string) { const { error } = await createSupabaseBrowserClient().from("tasks").delete().eq("id", id); ensure(error); }
