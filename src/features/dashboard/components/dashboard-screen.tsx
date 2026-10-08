@@ -4,7 +4,8 @@ import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { FormEvent, useCallback, useEffect, useMemo, useState } from "react";
 import { createSupabaseBrowserClient } from "@/lib/supabase/client";
-import { deleteProject, deleteTask, listWorkspaceData, saveProject as persistProject, saveTask as persistTask, updateProjectStatus } from "@/lib/supabase/data";
+import { deleteProject, deleteTask, getDashboardSummary, listWorkspaceData, saveProject as persistProject, saveTask as persistTask, updateProjectStatus } from "@/lib/supabase/data";
+import { apiRequest } from "@/lib/api";
 import type { Project, ProjectInput, ProjectStatus } from "@/features/projects/types";
 import type { Task, TaskInput, TaskPriority, TaskStatus } from "@/features/tasks/types";
 
@@ -76,17 +77,24 @@ export default function DashboardScreen({ initialView = "Overview", projectId }:
   const [editingTask, setEditingTask] = useState<Task>();
   const [error, setError] = useState("");
   const [loading, setLoading] = useState(true);
+  const [dashboardSummary, setDashboardSummary] = useState({ totalProjects: 0, totalTasks: 0, completedTasks: 0, pendingTasks: 0, projectsInProgress: 0 });
 
   const load = useCallback(async () => {
     try {
-      const supabase = createSupabaseBrowserClient();
-      const { data: { user }, error: authError } = await supabase.auth.getUser();
-      if (authError || !user) { router.replace("/login"); return; }
-      const fullName = user.user_metadata?.full_name as string | undefined;
-      setUserName(fullName?.split(" ")[0] ?? user.email?.split("@")[0] ?? "there");
-      const workspace = await listWorkspaceData();
+      const [user, workspace, summary] = await Promise.all([
+        apiRequest<{ fullName: string; email: string }>("/auth/me"),
+        listWorkspaceData(),
+        getDashboardSummary(),
+      ]);
+      setUserName(user.fullName?.split(" ")[0] ?? user.email?.split("@")[0] ?? "there");
       setProjects(workspace.projects); setTasks(workspace.tasks);
+      setDashboardSummary(summary);
     } catch (caught) {
+      if (caught instanceof Error && caught.message.toLowerCase().includes("session")) {
+        await createSupabaseBrowserClient().auth.signOut();
+        router.replace("/login");
+        return;
+      }
       setError(caught instanceof Error ? caught.message : "Could not load your workspace.");
     }
     finally { setLoading(false); }
@@ -96,15 +104,15 @@ export default function DashboardScreen({ initialView = "Overview", projectId }:
   const projectNames = useMemo(() => new Map(projects.map((project) => [project.id, project.name])), [projects]);
   const visibleProjects = projects.filter((project) => project.name.toLowerCase().includes(query.toLowerCase()) && (projectStatus === "All status" || project.status === projectStatus));
   const visibleTasks = tasks.filter((task) => `${task.name} ${projectNames.get(task.projectId) ?? ""}`.toLowerCase().includes(query.toLowerCase()) && (taskStatus === "All status" || task.status === taskStatus) && (priority === "All priority" || task.priority === priority) && (taskProject === "All projects" || task.projectId === taskProject));
-  const completed = tasks.filter((task) => task.status === "Completed").length;
-  const stats = [{ label: "Total projects", value: projects.length }, { label: "Total tasks", value: tasks.length }, { label: "Completed tasks", value: completed }, { label: "Projects in progress", value: projects.filter((project) => project.status === "In Progress").length }];
+  const stats = [{ label: "Total projects", value: dashboardSummary.totalProjects }, { label: "Total tasks", value: dashboardSummary.totalTasks }, { label: "Completed tasks", value: dashboardSummary.completedTasks }, { label: "Pending tasks", value: dashboardSummary.pendingTasks }, { label: "Projects in progress", value: dashboardSummary.projectsInProgress }];
 
-  async function saveProject(input: ProjectInput) { try { const saved = await persistProject(input, editingProject?.id); setProjects((current) => editingProject ? current.map((item) => item.id === saved.id ? saved : item) : [saved, ...current]); setModal(null); setEditingProject(undefined); } catch (caught) { setError(caught instanceof Error ? caught.message : "Could not save project."); } }
-  async function saveTask(input: TaskInput, taskId?: string) { try { const saved = await persistTask(input, taskId ?? editingTask?.id); const previousProjectId = editingTask?.projectId; const nextTasks = taskId || editingTask ? tasks.map((item) => item.id === saved.id ? saved : item) : [saved, ...tasks]; const projectIds = [...new Set([previousProjectId, saved.projectId].filter((id): id is string => Boolean(id)))]; const updatedProjects = await Promise.all(projectIds.map(async (projectId) => { const project = projects.find((item) => item.id === projectId); if (!project) return null; const nextStatus = getProjectStatus(nextTasks.filter((task) => task.projectId === projectId)); return project.status === nextStatus ? null : updateProjectStatus(projectId, nextStatus); })); setProjects((current) => current.map((item) => updatedProjects.find((updated) => updated?.id === item.id) ?? item)); setTasks(nextTasks); setModal(null); setEditingTask(undefined); } catch (caught) { setError(caught instanceof Error ? caught.message : "Could not save task."); } }
-  async function deleteProjectRecord(id: string) { if (!confirm("Delete this project and all its tasks?")) return; try { await deleteProject(id); setProjects((current) => current.filter((item) => item.id !== id)); setTasks((current) => current.filter((item) => item.projectId !== id)); } catch (caught) { setError(caught instanceof Error ? caught.message : "Could not delete project."); } }
-  async function deleteTaskRecord(id: string) { try { const deletedTask = tasks.find((task) => task.id === id); await deleteTask(id); const nextTasks = tasks.filter((item) => item.id !== id); if (deletedTask) { const project = projects.find((item) => item.id === deletedTask.projectId); if (project) { const nextStatus = getProjectStatus(nextTasks.filter((task) => task.projectId === project.id)); if (project.status !== nextStatus) { const updatedProject = await updateProjectStatus(project.id, nextStatus); setProjects((current) => current.map((item) => item.id === updatedProject.id ? updatedProject : item)); } } } setTasks(nextTasks); } catch (caught) { setError(caught instanceof Error ? caught.message : "Could not delete task."); } }
+  async function refreshSummary() { try { setDashboardSummary(await getDashboardSummary()); } catch { /* Keep the last displayed summary if a refresh fails. */ } }
+  async function saveProject(input: ProjectInput) { try { const saved = await persistProject(input, editingProject?.id); setProjects((current) => editingProject ? current.map((item) => item.id === saved.id ? saved : item) : [saved, ...current]); setModal(null); setEditingProject(undefined); void refreshSummary(); } catch (caught) { setError(caught instanceof Error ? caught.message : "Could not save project."); } }
+  async function saveTask(input: TaskInput, taskId?: string) { try { const saved = await persistTask(input, taskId ?? editingTask?.id); const previousProjectId = editingTask?.projectId; const nextTasks = taskId || editingTask ? tasks.map((item) => item.id === saved.id ? saved : item) : [saved, ...tasks]; const projectIds = [...new Set([previousProjectId, saved.projectId].filter((id): id is string => Boolean(id)))]; const updatedProjects = await Promise.all(projectIds.map(async (projectId) => { const project = projects.find((item) => item.id === projectId); if (!project) return null; const nextStatus = getProjectStatus(nextTasks.filter((task) => task.projectId === projectId)); return project.status === nextStatus ? null : updateProjectStatus(projectId, nextStatus); })); setProjects((current) => current.map((item) => updatedProjects.find((updated) => updated?.id === item.id) ?? item)); setTasks(nextTasks); setModal(null); setEditingTask(undefined); void refreshSummary(); } catch (caught) { setError(caught instanceof Error ? caught.message : "Could not save task."); } }
+  async function deleteProjectRecord(id: string) { if (!confirm("Delete this project and all its tasks?")) return; try { await deleteProject(id); setProjects((current) => current.filter((item) => item.id !== id)); setTasks((current) => current.filter((item) => item.projectId !== id)); void refreshSummary(); } catch (caught) { setError(caught instanceof Error ? caught.message : "Could not delete project."); } }
+  async function deleteTaskRecord(id: string) { try { const deletedTask = tasks.find((task) => task.id === id); await deleteTask(id); const nextTasks = tasks.filter((item) => item.id !== id); if (deletedTask) { const project = projects.find((item) => item.id === deletedTask.projectId); if (project) { const nextStatus = getProjectStatus(nextTasks.filter((task) => task.projectId === project.id)); if (project.status !== nextStatus) { const updatedProject = await updateProjectStatus(project.id, nextStatus); setProjects((current) => current.map((item) => item.id === updatedProject.id ? updatedProject : item)); } } } setTasks(nextTasks); void refreshSummary(); } catch (caught) { setError(caught instanceof Error ? caught.message : "Could not delete task."); } }
   async function toggleTask(task: Task) { await saveTask({ projectId: task.projectId, name: task.name, description: task.description, priority: task.priority, status: task.status === "Completed" ? "Pending" : "Completed", dueDate: task.dueDate }, task.id); }
-  async function logout() { try { await createSupabaseBrowserClient().auth.signOut(); } finally { router.replace("/login"); } }
+  async function logout() { const supabase = createSupabaseBrowserClient(); try { const { data } = await supabase.auth.getSession(); if (data.session) await apiRequest<void>("/auth/logout", { method: "POST", body: JSON.stringify({ refreshToken: data.session.refresh_token }) }); } catch { /* Always clear the local session if the API is unavailable. */ } finally { await supabase.auth.signOut(); router.replace("/login"); } }
   function navigate(next: "Overview" | "Projects" | "My tasks") { setView(next); setQuery(""); }
 
   if (loading) return <main className="loading-screen">Loading your workspace…</main>;

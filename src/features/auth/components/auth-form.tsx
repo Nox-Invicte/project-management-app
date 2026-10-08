@@ -4,6 +4,13 @@ import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { FormEvent, useState } from "react";
 import { createSupabaseBrowserClient } from "@/lib/supabase/client";
+import { apiRequest } from "@/lib/api";
+
+type AuthResponse = {
+  user: { id: string; fullName: string; email: string };
+  session: { accessToken: string; refreshToken: string } | null;
+  emailConfirmationRequired?: boolean;
+};
 
 export default function AuthForm({ mode }: { mode: "login" | "register" }) {
   const router = useRouter();
@@ -27,26 +34,22 @@ export default function AuthForm({ mode }: { mode: "login" | "register" }) {
 
     setLoading(true);
     try {
-      if (mode === "register") {
-        const supabase = createSupabaseBrowserClient();
-        const { data, error: signUpError } = await supabase.auth.signUp({
-          email: email.trim(),
-          password,
-          options: { data: { full_name: fullName.trim() } },
-        });
-        if (signUpError) throw signUpError;
-        if (!data.session) {
-          setError("Account created. Check your email to confirm your address, then sign in.");
-          return;
-        }
-      } else {
-        const supabase = createSupabaseBrowserClient();
-        const { error: signInError } = await supabase.auth.signInWithPassword({
-          email: email.trim(),
-          password,
-        });
-        if (signInError) throw signInError;
+      const result = await apiRequest<AuthResponse>(`/auth/${mode}`, {
+        method: "POST",
+        auth: false,
+        body: JSON.stringify(mode === "register"
+          ? { fullName: fullName.trim(), email: email.trim(), password }
+          : { email: email.trim(), password }),
+      });
+      if (!result.session) {
+        setError("Account created. Check your email to confirm your address, then sign in.");
+        return;
       }
+      const { error: sessionError } = await createSupabaseBrowserClient().auth.setSession({
+        access_token: result.session.accessToken,
+        refresh_token: result.session.refreshToken,
+      });
+      if (sessionError) throw sessionError;
       router.push("/dashboard");
       router.refresh();
     } catch (caught) {
