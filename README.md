@@ -1,40 +1,44 @@
-# Taskflow
+# Taskflow Project Management
 
-Taskflow is a Next.js project and task manager backed by Supabase Auth and Postgres.
+Taskflow is a Next.js web client and an Express REST API backed by Supabase Auth and PostgreSQL. The Android app can use the same API and accounts; add it as a separate Expo app under `mobile/`.
 
-## Setup
+## Prerequisites
 
-1. Create a Supabase project and run [`supabase/schema.sql`](./supabase/schema.sql) in the SQL editor.
-2. Copy [`.env.example`](./.env.example) to `.env.local` and fill in the project URL and anon key from **Project settings → API**.
-3. In Supabase Auth settings, choose whether email confirmation is required.
-4. Install and run the app:
+- Node.js 22 or later and npm
+- A Supabase project with the schema in `supabase/schema.sql` applied
 
-```bash
-npm install
-npm run dev
-```
+## Local setup
 
-Open `http://localhost:3000`. Register with a full name, unique email, and an 8+ character password. Supabase stores passwords securely and maintains the browser session; unauthenticated users are redirected to `/login`.
+1. Copy `.env.example` to `.env` and fill in your Supabase project URL and publishable key. Use the same project values in both the `NEXT_PUBLIC_*` and server variables.
+2. Apply `supabase/schema.sql` in the Supabase SQL editor.
+3. Install dependencies with `npm install`.
+4. Start the API and web app in separate terminals:
 
-## Features
+   ```sh
+   npm run api:dev
+   npm run dev
+   ```
 
-- Email/password registration, login, logout, email confirmation support, and persistent Supabase sessions.
-- Dashboard totals for projects, tasks, completed tasks, and projects in progress.
-- Project and task create, edit, delete, and task completion actions.
-- Search across projects/tasks, project status filtering, and task status/priority filtering.
-- Responsive workspace layout for desktop and mobile browsers.
+The web app runs at `http://localhost:3000`; the API runs at `http://localhost:4000`. Check `http://localhost:4000/health` for API status. `NEXT_PUBLIC_API_URL` defaults to the local API if omitted.
 
-## Data and security
+## API and mobile client
 
-Supabase Auth owns the `auth.users` table, password hashing, email uniqueness, sessions, and token expiry. The SQL script only creates `projects` and `tasks`; it does not create a users or passwords table. Every project and task has an `owner_id` referencing `auth.users(id)`, and RLS policies require `auth.uid()` to match that owner. Tasks can only reference projects owned by the current user. Projects cascade-delete their tasks.
+See [docs/API.md](docs/API.md) for endpoints, payloads, authentication, response shapes, and Android development notes. The API validates Supabase access tokens and makes user-scoped database requests so the existing row-level security policies continue to apply.
 
-To populate safe sample data for the currently signed-in user, run `select public.seed_demo_data();` in the SQL editor. The function is idempotent and does not create users.
+The Android client should store `accessToken` and `refreshToken` using Expo SecureStore, send the access token as a bearer token, and call `POST /api/auth/refresh` when necessary. Do not bundle a service-role key.
 
-### Security controls
+## Production
 
-- **JWT authentication:** Supabase Auth issues and refreshes signed JWT access tokens. The browser client sends them through the Supabase SDK; no custom JWT or password table is used.
-- **Protected routes:** [`src/proxy.ts`](./src/proxy.ts) refreshes the Supabase session and redirects unauthenticated users away from dashboard, project, and task routes. It also redirects authenticated users away from login and registration.
-- **Authorization:** Postgres RLS checks `auth.uid() = owner_id` for every project/task operation, including cross-project task ownership checks.
-- **SQL injection protection:** Data access uses Supabase PostgREST methods (`select`, `insert`, `update`, `delete`, and `eq`) rather than interpolated SQL. Supabase parameterizes these requests.
-- **Sensitive responses:** The application only selects project/task fields and user metadata needed by the UI. Passwords and Auth internals remain in Supabase Auth and are never returned by the app.
-- **Authentication rate limiting:** Supabase Auth applies server-side rate limits to sign-up and password sign-in endpoints. Review and adjust them in Supabase Dashboard → Authentication → Rate Limits. The UI also disables each auth form while its request is in progress.
+- Set the Supabase variables, `PORT`, and `CORS_ORIGINS` in the API host environment.
+- Set `NEXT_PUBLIC_API_URL` and `NEXT_PUBLIC_SUPABASE_*` in the web host environment.
+- Build the API with `npm run api:build`; run it with `npm run api:start`.
+- Configure `CORS_ORIGINS` with the exact deployed web origin(s), comma-separated if needed.
+- Configure mobile with the deployed API base URL. Native Android requests are not subject to browser CORS, but web requests are.
+
+## Project structure
+
+- `src/`: Next.js web application
+- `server/src/`: Express API
+- `supabase/schema.sql`: PostgreSQL tables, constraints, and row-level security policies
+- `docs/API.md`: Android/web REST contract
+- `PROJECT_MEMORY.md`: summarized assignment requirements and project plan
